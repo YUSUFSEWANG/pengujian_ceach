@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Simulasi Cache — Python LRU</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  :root{
+    --bg:#0f1117;--bg2:#161b27;--bg3:#1e2538;--bg4:#252d42;
+    --border:#2e3858;--text:#e2e8f8;--muted:#8892b0;
+    --green:#4ade80;--red:#f87171;--amber:#fbbf24;--blue:#60a5fa;
+    --purple:#a78bfa;--cyan:#22d3ee;
+    --hit-bg:#0d2618;--miss-bg:#2a1010;--evict-bg:#2a1f08;
+  }
+  body{background:var(--bg);color:var(--text);font-family:'Consolas','JetBrains Mono',monospace;font-size:14px;min-height:100vh}
+
+  header{background:var(--bg2);border-bottom:1px solid var(--border);padding:14px 24px;display:flex;align-items:center;gap:14px}
+  header h1{font-size:16px;font-weight:600;letter-spacing:.5px;color:var(--blue)}
+  .badge{background:var(--bg4);border:1px solid var(--border);border-radius:6px;padding:3px 10px;font-size:12px;color:var(--muted)}
+
+  .layout{display:grid;grid-template-columns:340px 1fr;gap:0;height:calc(100vh - 53px)}
+
+
+  .panel{background:var(--bg2);border-right:1px solid var(--border);display:flex;flex-direction:column;overflow:hidden}
+  .panel-header{padding:12px 16px;border-bottom:1px solid var(--border);font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--muted)}
+
+  .stats-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;padding:12px}
+  .stat{background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:10px 12px}
+  .stat-val{font-size:22px;font-weight:700;line-height:1}
+  .stat-lbl{font-size:11px;color:var(--muted);margin-top:3px}
+  .stat.hit .stat-val{color:var(--green)}
+  .stat.miss .stat-val{color:var(--red)}
+  .stat.rate .stat-val{color:var(--amber)}
+  .stat.evict .stat-val{color:var(--purple)}
+
+  .slots{padding:12px;flex:1;overflow-y:auto}
+  .slot{background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin-bottom:6px;transition:all .3s;position:relative}
+  .slot.empty{border-style:dashed;opacity:.4}
+  .slot.highlight{border-color:var(--green);background:var(--hit-bg);animation:pulse .5s}
+  .slot-index{position:absolute;right:10px;top:8px;font-size:10px;color:var(--muted)}
+  .slot-key{color:var(--cyan);font-weight:600;font-size:13px}
+  .slot-val{color:var(--muted);font-size:12px;margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .slot-meta{font-size:11px;color:var(--muted);margin-top:4px;display:flex;gap:10px}
+  .slot-ttl{color:var(--amber)}
+  .slot-mru{color:var(--green);font-size:10px}
+  .slot-lru{color:var(--red);font-size:10px}
+
+  .bar-wrap{padding:0 12px 10px}
+  .bar-label{font-size:11px;color:var(--muted);margin-bottom:4px;display:flex;justify-content:space-between}
+  .bar{background:var(--bg4);border-radius:4px;height:6px;overflow:hidden}
+  .bar-fill{height:100%;border-radius:4px;background:linear-gradient(90deg,var(--blue),var(--purple));transition:width .4s}
+
+  .right{display:flex;flex-direction:column;overflow:hidden}
+
+  .controls{padding:14px 16px;border-bottom:1px solid var(--border);display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+  input[type=text]{background:var(--bg3);border:1px solid var(--border);border-radius:6px;color:var(--text);font-family:inherit;font-size:13px;padding:7px 12px;outline:none;width:140px}
+  input[type=text]:focus{border-color:var(--blue)}
+  button{background:var(--bg3);border:1px solid var(--border);border-radius:6px;color:var(--text);font-family:inherit;font-size:13px;padding:7px 14px;cursor:pointer;transition:all .15s}
+  button:hover{background:var(--bg4);border-color:var(--blue);color:var(--blue)}
+  button.danger:hover{border-color:var(--red);color:var(--red)}
+  button.primary{border-color:var(--blue);color:var(--blue)}
+  button.primary:hover{background:rgba(96,165,250,.12)}
+  .sep{width:1px;height:24px;background:var(--border)}
+
+  .log-wrap{flex:1;overflow-y:auto;padding:0}
+  .log-entry{display:grid;grid-template-columns:70px 80px 120px 80px 1fr;align-items:center;padding:9px 16px;border-bottom:1px solid rgba(255,255,255,.03);font-size:12px;gap:10px;transition:background .2s}
+  .log-entry:hover{background:var(--bg3)}
+  .log-entry.hit{border-left:3px solid var(--green);background:rgba(74,222,128,.04)}
+  .log-entry.miss{border-left:3px solid var(--red);background:rgba(248,113,113,.04)}
+  .log-entry.expired{border-left:3px solid var(--amber);background:rgba(251,191,36,.04)}
+  .log-entry.put{border-left:3px solid var(--blue);background:rgba(96,165,250,.04)}
+  .log-entry.evict{border-left:3px solid var(--purple);background:rgba(167,139,250,.04)}
+  .log-entry.clear{border-left:3px solid var(--muted);background:rgba(136,146,176,.04)}
+  .tag{border-radius:4px;padding:2px 7px;font-size:11px;font-weight:600;text-align:center}
+  .tag.hit{background:rgba(74,222,128,.15);color:var(--green)}
+  .tag.miss{background:rgba(248,113,113,.15);color:var(--red)}
+  .tag.expired{background:rgba(251,191,36,.15);color:var(--amber)}
+  .tag.put{background:rgba(96,165,250,.15);color:var(--blue)}
+  .tag.evict{background:rgba(167,139,250,.15);color:var(--purple)}
+  .tag.clear{background:rgba(136,146,176,.15);color:var(--muted)}
+  .col-key{color:var(--cyan);font-weight:600}
+  .col-src{color:var(--muted)}
+  .col-ms{color:var(--amber)}
+  .col-ms.fast{color:var(--green)}
+  .log-header{display:grid;grid-template-columns:70px 80px 120px 80px 1fr;padding:8px 16px;border-bottom:1px solid var(--border);font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.7px;gap:10px;background:var(--bg2)}
+
+  .bench-row{display:flex;gap:8px;align-items:center}
+  .bench-label{font-size:11px;color:var(--muted)}
+
+  @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(74,222,128,.5)}100%{box-shadow:0 0 0 8px rgba(74,222,128,0)}}
+  @keyframes fadeIn{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:none}}
+  .log-entry{animation:fadeIn .2s ease}
+
+  .empty-log{text-align:center;padding:60px 20px;color:var(--muted);font-size:13px}
+  .conn-error{background:rgba(248,113,113,.1);border:1px solid var(--red);border-radius:8px;padding:10px 14px;color:var(--red);margin:12px;font-size:12px}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>🗄 Cache Simulator — Python LRU</h1>
+  <span class="badge" id="conn-badge">⬤ localhost:8765</span>
+  <span class="badge" id="cap-badge">Kapasitas: 5 slot</span>
+  <span class="badge" id="ttl-badge">TTL: 30s</span>
+</header>
+
+<div class="layout">
+
+  <!-- LEFT: Cache state -->
+  <div class="panel">
+    <div class="panel-header">Statistik & Isi Cache</div>
+
+    <div class="stats-grid">
+      <div class="stat hit"><div class="stat-val" id="s-hit">0</div><div class="stat-lbl">Cache HIT</div></div>
+      <div class="stat miss"><div class="stat-val" id="s-miss">0</div><div class="stat-lbl">Cache MISS</div></div>
+      <div class="stat rate"><div class="stat-val" id="s-rate">—</div><div class="stat-lbl">Hit Rate</div></div>
+      <div class="stat evict"><div class="stat-val" id="s-evict">0</div><div class="stat-lbl">Evictions</div></div>
+    </div>
+
+    <div class="bar-wrap">
+      <div class="bar-label"><span>Slot terpakai</span><span id="bar-txt">0 / 5</span></div>
+      <div class="bar"><div class="bar-fill" id="bar-fill" style="width:0%"></div></div>
+    </div>
+
+    <div class="panel-header" style="margin-top:4px">Isi Cache (MRU → LRU)</div>
+    <div class="slots" id="slots-list"></div>
+  </div>
+
+  <!-- RIGHT: Controls + Log -->
+  <div class="right">
+
+    <div class="controls">
+      <!-- GET -->
+      <input type="text" id="get-key" placeholder="key (mis: alice)" value="alice">
+      <button class="primary" onclick="doGet()">GET →</button>
+      <div class="sep"></div>
+      <!-- PUT -->
+      <input type="text" id="put-key" placeholder="key" value="bob">
+      <input type="text" id="put-val" placeholder="value JSON" value='{"nama":"Bob"}'>
+      <button onclick="doPut()">PUT</button>
+      <div class="sep"></div>
+      <!-- Hapus + Clear -->
+      <button class="danger" onclick="doClearKey()">DEL key</button>
+      <button class="danger" onclick="doClear()">CLEAR all</button>
+      <div class="sep"></div>
+      <!-- Auto bench -->
+      <div class="bench-row">
+        <button onclick="doBench()">⚡ Auto Bench</button>
+        <span class="bench-label" id="bench-info"></span>
+      </div>
+    </div>
+
+    <div class="log-header">
+      <span>Waktu</span><span>Status</span><span>Key</span><span>Durasi</span><span>Nilai / Info</span>
+    </div>
+
+    <div class="log-wrap" id="log-wrap">
+      <div class="empty-log" id="empty-msg">
+        Kirim request pertama untuk melihat log cache.<br>
+        <small>Pastikan server Python sudah berjalan di port 8765.</small>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+const BASE = "http://localhost:8765";
+let logEntries = [];
+
+// ── Polling status cache ────────────────────────────
+let pollTimer;
+function startPoll(){ pollTimer = setInterval(refreshStatus, 1500) }
+function stopPoll(){ clearInterval(pollTimer) }
+
+async function refreshStatus(){
+  try{
+    const r = await fetch(BASE+"/cache/status");
+    const d = await r.json();
+    renderStats(d);
+    renderSlots(d);
+  }catch(e){ /* server mungkin belum jalan */ }
+}
+
+function renderStats(d){
+  document.getElementById("s-hit").textContent   = d.stats.hits;
+  document.getElementById("s-miss").textContent  = d.stats.misses;
+  document.getElementById("s-rate").textContent  = d.hit_rate + "%";
+  document.getElementById("s-evict").textContent = d.stats.evictions;
+  document.getElementById("bar-txt").textContent = d.size+" / "+d.capacity;
+  document.getElementById("bar-fill").style.width = (d.size/d.capacity*100)+"%";
+  document.getElementById("cap-badge").textContent = "Kapasitas: "+d.capacity+" slot";
+  if(d.ttl) document.getElementById("ttl-badge").textContent = "TTL: "+d.ttl+"s";
+}
+
+function renderSlots(d){
+  const cap  = d.capacity;
+  const list = document.getElementById("slots-list");
+  list.innerHTML = "";
+
+  for(let i=0;i<cap;i++){
+    const e = d.entries[i];
+    const div = document.createElement("div");
+    if(!e){
+      div.className = "slot empty";
+      div.innerHTML = `<span class="slot-key">— empty —</span>`;
+    } else {
+      const isNew = (logEntries[0] && logEntries[0].key===e.key && (Date.now()-logEntries[0]._ts)<800);
+      div.className = "slot"+(isNew?" highlight":"");
+      const mruLru = i===0 ? '<span class="slot-mru">◀ MRU</span>' : (i===d.entries.length-1 ? '<span class="slot-lru">LRU ▶</span>' : '');
+      const ttlHtml = e.ttl_left!==null
+        ? `<span class="slot-ttl">TTL: ${e.ttl_left}s</span>` : "";
+      div.innerHTML = `
+        <span class="slot-index">#${i+1}</span>
+        <div class="slot-key">${e.key} ${mruLru}</div>
+        <div class="slot-val">${JSON.stringify(e.value)}</div>
+        <div class="slot-meta"><span>umur: ${e.age_sec}s</span>${ttlHtml}</div>`;
+    }
+    list.appendChild(div);
+  }
+}
+
+function addLog(entry){
+  entry._ts = Date.now();
+  logEntries.unshift(entry);
+  document.getElementById("empty-msg")?.remove();
+  const wrap = document.getElementById("log-wrap");
+  const row  = document.createElement("div");
+  row.className = "log-entry "+entry.type;
+
+  const now  = new Date();
+  const ts   = now.getHours().toString().padStart(2,"0")+":"+
+               now.getMinutes().toString().padStart(2,"0")+":"+
+               now.getSeconds().toString().padStart(2,"0");
+
+  const msClass = entry.ms && entry.ms < 10 ? "col-ms fast" : "col-ms";
+  const msText  = entry.ms !== undefined ? entry.ms+"ms" : "—";
+
+  row.innerHTML = `
+    <span>${ts}</span>
+    <span><span class="tag ${entry.type}">${entry.label}</span></span>
+    <span class="col-key">${entry.key||"—"}</span>
+    <span class="${msClass}">${msText}</span>
+    <span class="col-src">${entry.info||""}</span>`;
+
+  wrap.insertBefore(row, wrap.firstChild);
+}
+
+async function doGet(){
+  const key = document.getElementById("get-key").value.trim();
+  if(!key) return;
+  try{
+    const t0 = performance.now();
+    const r  = await fetch(BASE+"/data/"+key);
+    const d  = await r.json();
+    const ms = Math.round(performance.now()-t0);
+    const type = d.result==="HIT" ? "hit" : d.result==="EXPIRED" ? "expired" : "miss";
+    addLog({type, label:d.result, key,
+      ms: d.elapsed_ms ?? ms,
+      info: d.result==="HIT"
+        ? "✅ Dari cache"
+        : `❌ Query DB (~300ms latency) → disimpan ke cache`
+    });
+    await refreshStatus();
+  }catch(e){
+    showError();
+  }
+}
+
+async function doPut(){
+  const key = document.getElementById("put-key").value.trim();
+  const raw = document.getElementById("put-val").value.trim();
+  if(!key) return;
+  let val;
+  try{ val = JSON.parse(raw) } catch{ val = raw }
+  try{
+    const r = await fetch(BASE+"/data/"+key,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(val)});
+    const d = await r.json();
+    addLog({type:"put",label:"PUT",key,info:`📝 Tersimpan: ${JSON.stringify(val)}`});
+    await refreshStatus();
+  }catch(e){ showError() }
+}
+
+async function doClearKey(){
+  const key = document.getElementById("get-key").value.trim() || document.getElementById("put-key").value.trim();
+  if(!key) return;
+  try{
+    await fetch(BASE+"/cache/"+key,{method:"DELETE"});
+    addLog({type:"evict",label:"DEL",key,info:"🗑 Dihapus dari cache"});
+    await refreshStatus();
+  }catch(e){ showError() }
+}
+
+async function doClear(){
+  try{
+    await fetch(BASE+"/cache",{method:"DELETE"});
+    addLog({type:"clear",label:"CLEAR",info:"🗑 Seluruh cache dikosongkan"});
+    await refreshStatus();
+  }catch(e){ showError() }
+}
+
+const DEMO_KEYS = ["alice","alice","alice","bob","charlie","alice","dave","eve","alice","bob","frank","alice"];
+let benchIdx = 0;
+async function doBench(){
+  const keys = DEMO_KEYS;
+  document.getElementById("bench-info").textContent = "berjalan…";
+  for(let i=0;i<keys.length;i++){
+    document.getElementById("get-key").value = keys[i];
+    await doGet();
+    await sleep(400);
+  }
+  document.getElementById("bench-info").textContent = "✓ selesai";
+  setTimeout(()=>document.getElementById("bench-info").textContent="",3000);
+}
+
+function sleep(ms){ return new Promise(r=>setTimeout(r,ms)) }
+
+function showError(){
+  const wrap = document.getElementById("log-wrap");
+  if(wrap.querySelector(".conn-error")) return;
+  const d = document.createElement("div");
+  d.className = "conn-error";
+  d.innerHTML = "⚠ Tidak dapat terhubung ke server. Pastikan <code>python cache_server.py</code> sudah berjalan.";
+  wrap.appendChild(d);
+}
+
+document.getElementById("get-key").addEventListener("keydown",e=>{ if(e.key==="Enter") doGet() });
+document.getElementById("put-val").addEventListener("keydown",e=>{ if(e.key==="Enter") doPut() });
+
+startPoll();
+</script>
+</body>
+</html>
